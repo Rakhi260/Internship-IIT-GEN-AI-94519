@@ -1,3 +1,4 @@
+
 from langchain.chat_models import init_chat_model
 from langchain.agents import create_agent
 from langchain.tools import tool
@@ -6,73 +7,80 @@ import os
 import json
 import requests
 
-# ------------------ ENV ------------------
-load_dotenv()
-
-# ------------------ TOOLS ------------------
-@tool
-def calculator(expression: str) -> str:
-    """
-    Evaluates a basic arithmetic expression and returns the result.
-    Supports +, -, *, / and parentheses.
-    """
-    try:
-        return str(eval(expression))
-    except Exception:
-        return "Error: Invalid arithmetic expression"
-
+load_dotenv() # by default read env from .env file
 
 @tool
-def get_weather(city: str) -> str:
+def calculator(expression):
     """
-    Fetches the current weather of a given city using OpenWeather API.
-    Returns weather data in JSON string format.
+    This calculator function solves any arithmetic expression containing all constant values.
+    It supports basic arithmetic operators +, -, *, /, and parenthesis. 
+    
+    :param expression: str input arithmetic expression
+    :returns expression result as str
     """
     try:
-        api_key = os.getenv("OPENWEATHER_API_KEY")
-        url = (
-            "https://api.openweathermap.org/data/2.5/weather"
-            f"?appid={api_key}&units=metric&q={city}"
-        )
+        result = eval(expression)
+        return str(result)
+    except:
+        return "Error: Cannot solve expression"
+
+@tool
+def get_weather(city):
+    """
+    This get_weather() function gets the current weather of given city.
+    If weather cannot be found, it returns 'Error'.
+    This function doesn't return historic or general weather of the city.
+
+    :param city: str input - city name
+    :returns current weather in json format or 'Error'    
+    """
+    try:
+        api_key = os.getenv("OPEN_WEATHER_API")
+        url = f"https://api.openweathermap.org/data/2.5/weather?appid={api_key}&units=metric&q={city}"
         response = requests.get(url)
-        return json.dumps(response.json())
-    except Exception:
-        return "Error: Unable to fetch weather"
-
+        weather = response.json()
+        return json.dumps(weather)
+    except:
+        return "Error"
 
 @tool
-def read_file(filepath: str) -> str:
+def read_file(filepath):
     """
-    Reads a text file from the given file path and returns its content.
+    read the given file
     """
-    with open(filepath, "r") as file:
-        return file.read()
+    with open(filepath, 'r') as file:
+        text = file.read()
+        return text
 
-# ------------------ MODEL ------------------
+# create model
 llm = init_chat_model(
-    model="google_gemma-3-4b-it",
-    model_provider="openai",
-    base_url="http://127.0.0.1:1234/v1",
-    api_key="dummy-key"
+    model = "google/gemma-3n-e4b",
+    model_provider = "openai",
+    base_url = "http://127.0.0.1:1234/v1",
+    api_key = "non-needed"
 )
 
-# ------------------ AGENT ------------------
+# create agent
 agent = create_agent(
-    model=llm,
-    tools=[calculator, get_weather, read_file],
-    system_prompt="You are a helpful assistant. Answer briefly and clearly."
-)
+            model=llm, 
+            tools=[
+                calculator,
+                get_weather
+            ],
+            system_prompt="You are a helpful assistant. Answer in short."
+        )
 
-# ------------------ CHAT LOOP ------------------
 while True:
+    # take user input
     user_input = input("You: ")
-    if user_input.lower() == "exit":
+    if user_input == "exit":
         break
-
-    response = agent.invoke({
+    # invoke the agent with user input
+    result = agent.invoke({
         "messages": [
             {"role": "user", "content": user_input}
         ]
     })
-
-    print("AI:", response["messages"][-1].content)
+    llm_output = result["messages"][-1]
+    print("AI: ", llm_output.content)
+    print("\n\n", result["messages"])

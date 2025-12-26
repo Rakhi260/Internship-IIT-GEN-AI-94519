@@ -7,37 +7,41 @@ import os
 import json
 import requests
 
-# ------------------ ENV ------------------
+#ENV
 load_dotenv()
 
 
-@wrap_model_call
-def model_logging(request, handler):
-    print("Before model call:",'-'*20)
-    print(request)
-    response = handler(request)
-    print("After model call:",'-'*20)
-    print(response)
-    response.result[0].content = response.result[0].content.upper()
-    return response
+# @wrap_model_call
+# def model_logging(request, handler): #logging middleware
+#     print("Before call:",'-'*20)
+#     print(request)
+#     response = handler(request) #sends request to model
+#     print("After call:",'-'*20)
+#     print(response)
+#     response.result[0].content = response.result[0].content.upper()
+#     return response
 
-@wrap_model_call
-def limit_model_context(request, handler):
-    print("*Before model call: ",'-'*20)
-    #print(request)
-    request.messages = request.messages[-5:]
-    response = handler(request)
-    print("*After model call:",'-'*20)
-    print(response)
-    response.result[0].content = response.result[0].content.upper()
-    return response
+# @wrap_model_call
+# def limit_model_context(request, handler): #context limiter
+#     print("*Before model call: ",'-'*20)
+#     #print(request)
+#     request = request.override(messages=request.messages[-5:]) #keeps only last 5 messages
+#     response = handler(request) #sends request to model
+#     print("*After model call:",'-'*20)
+#     print(response)
+#     response.result[0].content = response.result[0].content.upper() #modifies output
+#     return response
 
-# ------------------ TOOLS ------------------
+#TOOLS
 @tool
 def calculator(expression: str) -> str:
     """
-    Evaluates a basic arithmetic expression and returns the result.
-    Supports +, -, *, / and parentheses.
+    This is calculator function solves any arithmetic expression containing all constant value.
+    It supports basic arithmetic operators +,-,*,/, and paranthesis.
+    
+
+    :param exp: str input arithmetic expression
+    : returns expression result as str 
     """
     try:
         return str(eval(expression))
@@ -46,34 +50,41 @@ def calculator(expression: str) -> str:
 
 
 @tool
-def get_weather(city: str) -> str:
+def get_weather(city):
     """
-    Fetches the current weather of a given city using OpenWeather API.
-    Returns weather data in JSON string format.
+    This weather_tool gives current weather of a city,
+    If weather of given city cannot found, return the "Error".
+    This function doesn't return historic or general weather of the city
+    If you get any prompt related to get weather call the tool get_weather.
+    
+    :param city: str input - city name
+    : return current weather in json format or error
     """
     try:
-        api_key = os.getenv("OPENWEATHER_API_KEY")
-        url = (
-            "https://api.openweathermap.org/data/2.5/weather"
-            f"?appid={api_key}&units=metric&q={city}"
-        )
+        api_key = os.getenv("OPEN_WEATHER_API")
+        url = f"https://api.openweathermap.org/data/2.5/weather?appid={api_key}&units=metric&q={city}"
         response = requests.get(url)
-        return json.dumps(response.json())
-    except Exception:
-        if response.status_code == 200:
-             return json.dumps(response.json())
-        else:
-             return "Error fetching weather"
-
+        weather = response.json()
+        return json.dumps(weather)
+    except:
+        return "error"
 
 
 @tool
 def read_file(filepath: str) -> str:
     """
-    Reads a text file from the given file path and returns its content.
+    ONLY use this tool when the user explicitly provides a FULL FILE PATH
+    like C:/Users/.../file.txt or /home/user/file.txt.
+    DO NOT use this tool for weather, math, definitions, or general questions.
     """
-    with open(filepath, "r") as file:
-        return file.read()
+    try:
+        with open(filepath, "r") as file:
+         return file.read()
+    except FileNotFoundError:
+        return "Error:File not found"
+    except Exception as e:
+        return f"error finding file {e}"
+        
     
 @tool
 def knowledge_lookup(query: str) -> str:
@@ -88,35 +99,50 @@ def knowledge_lookup(query: str) -> str:
 
     return knowledge_base.get(query.lower(), "No knowledge found.")
 
-# ------------------ MODEL ------------------
-llm = init_chat_model(
-    model="google_gemma-3-4b-it",
+#MODEL
+llm = init_chat_model( # This connects LangChain to: LM Studio Running locally on your machine
+    model="qwen/qwen3-4b-2507",
     model_provider="openai",
     base_url="http://127.0.0.1:1234/v1",
     api_key="dummy-key"
 )
 
-# ------------------ AGENT ------------------
-agent = create_agent(
+#AGENT
+agent = create_agent(#creates intelligent agent
     model=llm,
-    tools=[calculator, get_weather, read_file,knowledge_lookup],
-    middleware = [model_logging, limit_model_context],
-    system_prompt="You are a helpful assistant. Answer briefly and clearly."
+    tools=[calculator, get_weather, read_file,knowledge_lookup], #agent decides when to use which tool
+  #  middleware = [model_logging, limit_model_context],
+    system_prompt="""You are a helpful assistant. Answer briefly and clearly.
+                   Tool usage rules:
+                   -use calculator for math expression
+                   -use get_weather to answer weather questions
+                   -Use read_file only when user provides full file path
+                   -Do not guess file paths
+                   -use knowledge_lookup for definiton style questions 
+                   -if prompt is not related to tool give answers based on your knowledge
+                   answer all questions briefly and clearly
+                   -If you get any prompt related to get weather call the tool get_weather
+                   """ #controls agent behaviour
 )
 
-# ------------------ CHAT LOOP ------------------
-conversation = []
-while True:
+#CHAT
+conversation = [] #stores chat history
+while True: #continuous chat
     user_input = input("You: ")
     if user_input.lower() == "exit":
         break
     
-    conversation.append({"role":"user","content":user_input})
+    conversation.append({"role":"user","content":user_input}) #adds user message
 
     response = agent.invoke({
-        "messages": conversation
+        "messages": conversation     #Agent:
+                                     #Reads messages
+                                     #Chooses tools if needed
+                                     #Calls LLM
+                                     #Middleware runs
+                                     #Returns result
     })
     
+    ai_msg = response["messages"][-1]
+    print("AI msg:", ai_msg.content)
     conversation = response["messages"]
-
-    print("AI:", conversation[-1].content)

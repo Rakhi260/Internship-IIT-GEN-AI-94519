@@ -18,36 +18,25 @@ llm = init_chat_model(
 )
 
 @tool
-def csv_tool(csv_path: str,question: str) -> str:
+def csv_tool(csv_path: str, sql_query: str) -> str:
     """
-    Upload csv ,show schema,convert question to sql and answer it
+    Executes SQL query on a CSV file using pandasql
     """
-    df = pd.read_csv(csv_path)
-    
-    schema = df.dtypes.to_string()
-    
-    prompt = f"""
-    convert the following question into sql.
-    Table name is df
-    
-    Question: {question}    """
-    
-    sql_query = llm.invoke(prompt).content
-    
     try:
+        df = pd.read_csv(csv_path)
+
+        # clean SQL
+        sql_query = sql_query.strip()
+        if sql_query.lower().startswith("select") is False:
+            return "Error: Invalid SQL generated"
+
         result = ps.sqldf(sql_query, {"df": df})
-        return f"""
-        CSV Schema:
-        {schema}
-        
-        SQL Query
-        {sql_query}
-        
-        Answer:
-        {result}
-    """
+        return result.to_string()
+
     except Exception as e:
-        return f"SQL Execution Error {e}"
+        return f"SQL Error: {e}"
+
+
 
 @tool
 def web_tool(question: str) -> str:
@@ -73,8 +62,23 @@ tools = [csv_tool, web_tool]
 
 agent = create_agent(
     model=llm,
-    tools=tools
+    tools=tools,
+    system_prompt="""
+    You are a data assistant.
+
+    IMPORTANT RULES:
+    - The CSV is loaded as a pandas DataFrame named 'df'
+    - ALWAYS use table name 'df' in SQL queries
+    - NEVER invent table names like products, users, sales, etc.
+    
+    If the question involves CSV analysis:
+    1. Generate SQL using ONLY table 'df'
+    2. Call csv_tool with csv_path and sql_query
+
+    If the question is about Sunbeam Institute, use web_tool.
+    """
 )
+
 
 #chat_history
 chat_history = []
@@ -86,13 +90,19 @@ while True:
     if user_input.lower() == "exit":
         break
     
-    response = agent.invoke({"input": user_input})
+    response = agent.invoke({
+        "messages":[
+            {"role":"user","content":user_input}
+            ]
+    })
     
     chat_history.append({
         "User": user_input,
         "Agent": response
     })
-    print("\nAgent Response: ",response)   
+    final_message = response["messages"][-1].content
+    print("\nAgent Response:\n", final_message)
+   
 
 #dispalying chat history
 print("Full chat history")
