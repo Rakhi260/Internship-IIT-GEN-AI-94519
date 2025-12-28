@@ -1,11 +1,11 @@
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader
-from chromadb.config import Settings
-from langchain.chat_models import init_chat_model
-from langchain.embeddings import init_embeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter #Used to break long resume text into small chunks
+from langchain_community.document_loaders import PyPDFLoader #Used to read PDF files and extract text from them
+from chromadb.config import Settings #Used to configure ChromaDB settings, like:where data is stored 
+from langchain.chat_models import init_chat_model #Used to initialize the LLM
+from langchain.embeddings import init_embeddings #Used to create embeddings (numeric vectors) from text
 import streamlit as st
 import pandas as pd
-import chromadb
+import chromadb #vectordatabase where resumes are stored
 import tempfile
 import os
 
@@ -81,6 +81,36 @@ def store_resume_in_chromadb(resume_text, resume_name):
         metadatas=metadatas,
         ids=ids
     )
+    
+def shortlist_resumes(job_description, top_k_chunks=20):
+    #1 convert job description to embedding
+    jd_embedding = embedding_model.embed_query(job_description)
+    
+    #2 Query Chroma DB
+    results = collection.query( #computing distance by cosine similrity .query does it internally
+        query_embeddings=[jd_embedding],
+        n_results=top_k_chunks,
+        include=["metadatas"]
+    )
+    
+    if not results["metadatas"]:
+        return[]
+    
+    #3 Count matches per resume
+    resume_score = {}
+    
+    for meta in results["metadatas"][0]:
+        resume_name = meta["resume_name"]
+        resume_score[resume_name] = resume_score.get(resume_name, 0)+1
+        
+    #4 Sort resumes by score
+    shortlisted = []
+    
+    for resume in resume_score:
+        shortlisted.append((resume, resume_score[resume]))
+        
+    shortlisted.sort(reverse=True)
+    
 #file uploading via streamlit
 if menu == "Upload Resume":
     data_file = st.file_uploader("Upload a PDF file",type=["pdf"], accept_multiple_files=True) #list of files are stored in data_file
@@ -105,17 +135,16 @@ if menu == "Upload Resume":
             file_path = os.path.join(Resume_dir, file.name) #- Builds a path (file_path) inside the resumes folder using the file’s original name.
         
         #duplicate file restriction
-        if os.path.exists(file_path):
-            st.warning(f"{file.name} already uploaded.")
+            if os.path.exists(file_path):
+                st.warning(f"{file.name} already uploaded.")
               
         #save pdf file
-        with open(file_path,"wb") as f :
-            f.write(file.getbuffer())
+            with open(file_path,"wb") as f : #"wb" stands for write binary, used to store non-text files like PDFs without corruption
+                f.write(file.getbuffer())
             
-        resume_text, metadata = load_pdf_resume(file_path)
-        
-        st.success(f"{file.name} uploaded successfully")
-        store_resume_in_chromadb(resume_text, file.name)
+            resume_text, metadata = load_pdf_resume(file_path)
+            store_resume_in_chromadb(resume_text, file.name)
+            st.success(f"{file.name} uploaded successfully")
 
 elif menu == "List Resumes":
     st.subheader("Uploaded Resumes")
@@ -137,15 +166,15 @@ elif menu == "Delete Resumes":
     
     data = collection.get(include=["metadatas"])
     
-    if not data["metadata"]:
+    if not data["metadatas"]:
         st.info("No resumes available to delete")
     else:
         resume_names = sorted(
             set(meta["resume_name"] for meta in data["metadatas"])
         )
         
-        selected_resume = st.select_box(
-            "select a resume to delete",
+        selected_resume = st.selectbox(
+            "Select a resume to delete",
             resume_names
         )
         
@@ -161,9 +190,38 @@ elif menu == "Delete Resumes":
                 os.remove(file_path)
 
             st.success(f"{selected_resume} deleted successfully.")
-            st.experimental_rerun()
+            #st.experimental_rerun()
 
+elif menu == "Shortlist Resumes":
+    st.subheader("Resume Shortlisting")
+    
+    job_description = st.text_area(
+        "Enter ob description here",
+        height=200
+    )      
+    
+    top_n = st.number_input(
+        "Number of resumes to shortlist",
+        min_value=1,
+        max_value=10,
+        value=3
+    )
+    
+    if st.button("Shortlist"):
+        if not job_description.strip():
+            st.warning("Please enter a job description")
+        else:
+            shortlisted = shortlist_resumes(job_description)
+            
+            if not shortlisted:
+                st.info("No matching resumes found")
+            else:
+                st.success("Shortlisted Resumes")
+                
+                for i, (resume, score) in enumerate(shortlisted[:top_n], start=1):
+                    st.write(f"**{i}. {resume}** - Match score: {score}")
         
+     
 #Function: Retrieve relevant resume chunks 
 def retrieve_resume_chunks(question, top_k=5): #retrieves resume contents
     # 1. Convert question into embedding
@@ -205,7 +263,6 @@ Answer:
 
     response = llm.invoke(prompt)
     return response.content
-
 
     
 #chat input loop
